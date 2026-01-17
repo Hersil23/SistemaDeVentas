@@ -2,15 +2,12 @@
 require_once '../../config/database.php';
 require_once '../../includes/auth.php';
 
+requireLogin();
+
 header('Content-Type: application/json');
 
-if (!isLoggedIn()) {
-    echo json_encode(['success' => false, 'error' => 'No autorizado']);
-    exit;
-}
-
 $cuenta_id = isset($_GET['cuenta_id']) ? (int)$_GET['cuenta_id'] : 0;
-$solo_disponibles = isset($_GET['disponibles']) && $_GET['disponibles'] == '1';
+$solo_disponibles = isset($_GET['disponibles']) ? true : false;
 
 if ($cuenta_id <= 0) {
     echo json_encode(['success' => false, 'error' => 'ID de cuenta invalido']);
@@ -26,7 +23,8 @@ $sql .= " ORDER BY numero_perfil ASC";
 $stmt = $conn->prepare($sql);
 $stmt->bind_param("i", $cuenta_id);
 $stmt->execute();
-$perfiles = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$result = $stmt->get_result();
+$perfiles = $result->fetch_all(MYSQLI_ASSOC);
 $stmt->close();
 
 echo json_encode(['success' => true, 'perfiles' => $perfiles]);

@@ -173,7 +173,7 @@ require_once '../includes/header.php';
                             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Cliente</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Telefono</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Email</th>
-                            <th class="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase">Ventas</th>
+                            <th class="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase">Servicios</th>
                             <th class="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase">Estado</th>
                             <th class="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase">Acciones</th>
                         </tr></thead>
@@ -190,11 +190,20 @@ require_once '../includes/header.php';
                                 <?php else: ?>-<?php endif; ?>
                             </td>
                             <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300"><?php echo e($c['email'] ?: '-'); ?></td>
-                            <td class="px-4 py-3 text-center"><span class="px-2 py-1 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 text-xs font-medium"><?php echo $c['total_ventas']; ?></span></td>
+                            <td class="px-4 py-3 text-center">
+                                <?php if ($c['total_ventas'] > 0): ?>
+                                <button onclick="verCuentas(<?php echo $c['id']; ?>, '<?php echo e(addslashes($c['nombre'] . ' ' . $c['apellido'])); ?>')" class="inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 text-xs font-medium hover:bg-blue-200 dark:hover:bg-blue-900/50" title="Ver servicios">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                                    <?php echo $c['total_ventas']; ?>
+                                </button>
+                                <?php else: ?>
+                                <span class="text-slate-400 text-xs">0</span>
+                                <?php endif; ?>
+                            </td>
                             <td class="px-4 py-3 text-center"><span class="inline-flex px-2 py-1 text-xs font-medium rounded-full <?php echo $c['estado'] === 'activo' ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400' : 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400'; ?>"><?php echo ucfirst($c['estado']); ?></span></td>
                             <td class="px-4 py-3"><div class="flex items-center justify-center gap-1">
                                 <button onclick="openModal('editar', <?php echo htmlspecialchars(json_encode($c)); ?>)" class="p-2 text-slate-500 hover:text-primary-500 rounded-lg" title="Editar"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg></button>
-                                <form method="POST" class="inline" onsubmit="return confirm('¿Cambiar estado?')"><?php echo csrfField(); ?><input type="hidden" name="accion" value="cambiar_estado"><input type="hidden" name="id" value="<?php echo $c['id']; ?>"><input type="hidden" name="estado" value="<?php echo $c['estado']; ?>"><button type="submit" class="p-2 text-slate-500 hover:text-amber-500 rounded-lg" title="Cambiar estado"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg></button></form>
+                                <form method="POST" class="inline" onsubmit="return confirm('Cambiar estado?')"><?php echo csrfField(); ?><input type="hidden" name="accion" value="cambiar_estado"><input type="hidden" name="id" value="<?php echo $c['id']; ?>"><input type="hidden" name="estado" value="<?php echo $c['estado']; ?>"><button type="submit" class="p-2 text-slate-500 hover:text-amber-500 rounded-lg" title="Cambiar estado"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg></button></form>
                             </div></td>
                         </tr>
                         <?php endforeach; ?>
@@ -218,11 +227,18 @@ require_once '../includes/header.php';
                         </div>
                         <div class="flex items-center gap-4 text-sm text-slate-500 mb-3">
                             <?php if ($c['email']): ?><span><?php echo e($c['email']); ?></span><?php endif; ?>
-                            <span class="text-blue-600"><?php echo $c['total_ventas']; ?> ventas</span>
+                            <?php if ($c['total_ventas'] > 0): ?>
+                            <button onclick="verCuentas(<?php echo $c['id']; ?>, '<?php echo e(addslashes($c['nombre'] . ' ' . $c['apellido'])); ?>')" class="inline-flex items-center gap-1 text-blue-600">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                                <?php echo $c['total_ventas']; ?> servicios
+                            </button>
+                            <?php else: ?>
+                            <span class="text-slate-400">0 servicios</span>
+                            <?php endif; ?>
                         </div>
                         <div class="flex items-center gap-2">
                             <button onclick="openModal('editar', <?php echo htmlspecialchars(json_encode($c)); ?>)" class="flex-1 px-3 py-2 text-sm text-primary-600 bg-primary-50 rounded-lg">Editar</button>
-                            <form method="POST" class="flex-1" onsubmit="return confirm('¿Cambiar estado?')"><?php echo csrfField(); ?><input type="hidden" name="accion" value="cambiar_estado"><input type="hidden" name="id" value="<?php echo $c['id']; ?>"><input type="hidden" name="estado" value="<?php echo $c['estado']; ?>"><button type="submit" class="w-full px-3 py-2 text-sm text-amber-600 bg-amber-50 rounded-lg"><?php echo $c['estado'] === 'activo' ? 'Desactivar' : 'Activar'; ?></button></form>
+                            <form method="POST" class="flex-1" onsubmit="return confirm('Cambiar estado?')"><?php echo csrfField(); ?><input type="hidden" name="accion" value="cambiar_estado"><input type="hidden" name="id" value="<?php echo $c['id']; ?>"><input type="hidden" name="estado" value="<?php echo $c['estado']; ?>"><button type="submit" class="w-full px-3 py-2 text-sm text-amber-600 bg-amber-50 rounded-lg"><?php echo $c['estado'] === 'activo' ? 'Desactivar' : 'Activar'; ?></button></form>
                         </div>
                     </div>
                     <?php endforeach; ?>
@@ -233,6 +249,7 @@ require_once '../includes/header.php';
     </div>
 </div>
 
+<!-- Modal Crear/Editar -->
 <div id="modal" class="fixed inset-0 z-50 hidden">
     <div class="absolute inset-0 bg-black/50" onclick="closeModal()"></div>
     <div class="absolute inset-4 sm:inset-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:w-full sm:max-w-md bg-light-card dark:bg-dark-card rounded-xl shadow-xl max-h-[90vh] overflow-y-auto">
@@ -255,11 +272,105 @@ require_once '../includes/header.php';
     </div>
 </div>
 
+<!-- Modal Ver Cuentas -->
+<div id="modalCuentas" class="fixed inset-0 z-50 hidden">
+    <div class="absolute inset-0 bg-black/50" onclick="cerrarModalCuentas()"></div>
+    <div class="absolute inset-4 sm:inset-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:w-full sm:max-w-2xl bg-light-card dark:bg-dark-card rounded-xl shadow-xl max-h-[90vh] overflow-hidden flex flex-col">
+        <div class="flex items-center justify-between p-4 border-b border-light-border dark:border-dark-border">
+            <div>
+                <h3 class="font-semibold text-slate-800 dark:text-white">Servicios Activos</h3>
+                <p class="text-sm text-slate-500" id="cuentasCliente"></p>
+            </div>
+            <button onclick="cerrarModalCuentas()" class="p-2 text-slate-400"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
+        </div>
+        <div id="cuentasContent" class="p-4 overflow-y-auto flex-1">
+            <div class="text-center py-8 text-slate-500">Cargando...</div>
+        </div>
+    </div>
+</div>
+
 <script>
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('-translate-x-full');document.getElementById('sidebarOverlay').classList.toggle('hidden');}
-function openModal(tipo,data=null){const m=document.getElementById('modal');document.getElementById('formId').value='';document.getElementById('nombre').value='';document.getElementById('apellido').value='';document.getElementById('telefono').value='';document.getElementById('email').value='';document.getElementById('notas').value='';if(tipo==='crear'){document.getElementById('modalTitle').textContent='Nuevo Cliente';document.getElementById('formAccion').value='crear';}else{document.getElementById('modalTitle').textContent='Editar Cliente';document.getElementById('formAccion').value='editar';document.getElementById('formId').value=data.id;document.getElementById('nombre').value=data.nombre||'';document.getElementById('apellido').value=data.apellido||'';document.getElementById('telefono').value=data.telefono||'';document.getElementById('email').value=data.email||'';document.getElementById('notas').value=data.notas||'';}m.classList.remove('hidden');}
+
+function openModal(tipo,data=null){
+    const m=document.getElementById('modal');
+    document.getElementById('formId').value='';
+    document.getElementById('nombre').value='';
+    document.getElementById('apellido').value='';
+    document.getElementById('telefono').value='';
+    document.getElementById('email').value='';
+    document.getElementById('notas').value='';
+    if(tipo==='crear'){
+        document.getElementById('modalTitle').textContent='Nuevo Cliente';
+        document.getElementById('formAccion').value='crear';
+    }else{
+        document.getElementById('modalTitle').textContent='Editar Cliente';
+        document.getElementById('formAccion').value='editar';
+        document.getElementById('formId').value=data.id;
+        document.getElementById('nombre').value=data.nombre||'';
+        document.getElementById('apellido').value=data.apellido||'';
+        document.getElementById('telefono').value=data.telefono||'';
+        document.getElementById('email').value=data.email||'';
+        document.getElementById('notas').value=data.notas||'';
+    }
+    m.classList.remove('hidden');
+}
+
 function closeModal(){document.getElementById('modal').classList.add('hidden');}
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
+
+function verCuentas(clienteId, clienteNombre) {
+    document.getElementById('cuentasCliente').textContent = clienteNombre;
+    document.getElementById('cuentasContent').innerHTML = '<div class="text-center py-8 text-slate-500">Cargando...</div>';
+    document.getElementById('modalCuentas').classList.remove('hidden');
+    
+    fetch('ajax/get_cuentas_cliente.php?cliente_id=' + clienteId)
+        .then(r => r.json())
+        .then(data => {
+            if (data.success && data.cuentas.length > 0) {
+                let html = '<div class="space-y-3">';
+                data.cuentas.forEach(c => {
+                    const venceClass = c.dias_vence < 0 ? 'text-red-600 font-bold' : (c.dias_vence <= 7 ? 'text-amber-600' : 'text-slate-600 dark:text-slate-300');
+                    const venceText = c.dias_vence < 0 ? 'Vencido' : (c.dias_vence === 0 ? 'Hoy' : c.dias_vence + ' dias');
+                    
+                    html += '<div class="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">' +
+                        '<div class="flex items-start justify-between mb-2">' +
+                            '<div><span class="font-semibold text-slate-800 dark:text-white">' + c.servicio + '</span>' +
+                            '<span class="text-xs text-slate-400 ml-2">Perfil ' + c.numero_perfil + '</span></div>' +
+                            '<span class="text-sm ' + venceClass + '">' + venceText + '</span>' +
+                        '</div>' +
+                        '<div class="grid grid-cols-2 gap-2 text-sm">' +
+                            '<div><p class="text-slate-500">Correo:</p><p class="text-slate-800 dark:text-white font-mono text-xs">' + c.cuenta + '</p></div>' +
+                            '<div><p class="text-slate-500">Contrasena:</p><p class="text-slate-800 dark:text-white font-mono text-xs">' + (c.password || 'N/A') + '</p></div>' +
+                            '<div><p class="text-slate-500">PIN:</p><p class="text-slate-800 dark:text-white">' + (c.pin || 'N/A') + '</p></div>' +
+                            '<div><p class="text-slate-500">Vencimiento:</p><p class="text-slate-800 dark:text-white">' + (c.fecha_vencimiento || 'N/A') + '</p></div>' +
+                        '</div>' +
+                        '<div class="mt-2 pt-2 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between">' +
+                            '<span class="text-sm font-medium text-green-600">$' + parseFloat(c.precio_venta).toFixed(2) + '</span>' +
+                            '<span class="text-xs text-slate-400">Compra: ' + c.fecha_venta + '</span>' +
+                        '</div>' +
+                    '</div>';
+                });
+                html += '</div>';
+                document.getElementById('cuentasContent').innerHTML = html;
+            } else {
+                document.getElementById('cuentasContent').innerHTML = '<div class="text-center py-8 text-slate-500">No tiene servicios activos</div>';
+            }
+        })
+        .catch(err => {
+            document.getElementById('cuentasContent').innerHTML = '<div class="text-center py-8 text-red-500">Error al cargar</div>';
+        });
+}
+
+function cerrarModalCuentas() {
+    document.getElementById('modalCuentas').classList.add('hidden');
+}
+
+document.addEventListener('keydown',e=>{
+    if(e.key==='Escape'){
+        closeModal();
+        cerrarModalCuentas();
+    }
+});
 </script>
 
 <?php require_once '../includes/footer.php'; ?>

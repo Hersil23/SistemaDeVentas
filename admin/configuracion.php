@@ -4,76 +4,128 @@ require_once '../includes/auth.php';
 
 requireAdmin();
 
-// Actualizar tasa manualmente
-if (isset($_GET['actualizar_tasa'])) {
-    require_once '../includes/moneda.php';
-    $result = $conn->query("SELECT valor FROM configuracion WHERE clave = 'moneda_fuente'");
-    $fuente = 'binance';
-    if ($result && $result->num_rows > 0) {
-        $fuente = $result->fetch_assoc()['valor'];
-    }
-    actualizarTasa($fuente);
-    header('Location: configuracion.php?msg=tasa_actualizada');
-    exit;
-}
-
 $mensaje = '';
 $error = '';
 
-$conn->query("CREATE TABLE IF NOT EXISTS configuracion (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    clave VARCHAR(100) UNIQUE NOT NULL,
-    valor TEXT,
-    descripcion VARCHAR(255),
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-
+// Configuraciones por defecto
 $defaults = [
-    'nombre_negocio' => ['Sistema de Ventas', 'Nombre de tu negocio'],
-    'telefono_whatsapp' => ['', 'Numero WhatsApp para soporte'],
-    'email_contacto' => ['', 'Email de contacto'],
-    'moneda_simbolo' => ['$', 'Simbolo de moneda'],
-    'moneda_nombre' => ['USD', 'Nombre de moneda'],
-    'mensaje_whatsapp' => ["Hola {cliente}!\n\nDatos de tu cuenta de *{servicio}*:\n\nCorreo: {cuenta}\nContrasena: {password}\nPerfil: {perfil}\n\nVence: {vencimiento}\n\nGracias!", 'Plantilla WhatsApp'],
-    'dias_alerta_vencimiento' => ['7', 'Dias antes de vencimiento'],
-    'moneda_fuente' => ['binance', 'Fuente de tasa'],
-    'mostrar_bs' => ['1', 'Mostrar Bolivares'],
+    'nombre_negocio' => 'Mi Negocio',
+    'moneda_principal' => 'USD',
+    'tasa_cambio' => '50',
+    'banco' => '',
+    'telefono_pago' => '',
+    'cuenta_banco' => '',
+    'mensaje_entrega' => 'Hola {cliente}!
+Aqui estan los datos de tu cuenta de *{servicio}*:
+
+*Correo:* {cuenta}
+*Contrasena:* {password}
+*Perfil:* {perfil}
+*PIN:* {pin}
+
+*Adquirido:* {fecha_compra}
+*Vence:* {vencimiento}
+
+Gracias por tu compra!',
+    'mensaje_cambio' => 'Hola {cliente}!
+Te informamos que hubo un cambio en tu cuenta de *{servicio}*:
+
+*Nuevo Correo:* {cuenta}
+*Nueva Contrasena:* {password}
+*Perfil:* {perfil}
+*PIN:* {pin}
+
+Disculpa las molestias. Cualquier duda estamos a la orden!',
+    'mensaje_cobro' => 'IMPORTANTE! NO ATENDEMOS EMERGENCIAS
+
+Estimad(a) *{cliente}*
+Le informamos que su servicio de *{servicio}* ha vencido.
+Fecha de renovacion: *{vencimiento}*
+
+Para renovar, realice el pago de *{precio}* a traves de:
+*{banco}*
+- Tlf: {telefono_pago}
+- Cuenta: {cuenta_banco}
+
+Gracias! Si no desea renovar, por favor informenos.
+
+Nota importante:
+- Si el pago se realiza fuera de la fecha indicada, su perfil o cuenta sera activado al dia siguiente.
+- Atendemos a mas de 400 personas, por lo que le pedimos tomar previsiones.
+- Al ignorar este mensaje asumimos que no desea renovar y se procedera a suspender el servicio.',
+    'mensaje_renovar' => 'Hola *{cliente}*!
+Su pago ha sido confirmado.
+
+*Servicio:* {servicio}
+*Nueva fecha de vencimiento:* {vencimiento}
+
+Gracias por renovar con nosotros!'
 ];
 
-foreach ($defaults as $clave => $data) {
-    $stmt = $conn->prepare("INSERT IGNORE INTO configuracion (clave, valor, descripcion) VALUES (?, ?, ?)");
-    $stmt->bind_param("sss", $clave, $data[0], $data[1]);
-    $stmt->execute();
-    $stmt->close();
+// Obtener configuraciones actuales
+$configResult = $conn->query("SELECT clave, valor FROM configuracion");
+$config = [];
+while ($row = $configResult->fetch_assoc()) {
+    $config[$row['clave']] = $row['valor'];
+}
+
+// Merge con defaults
+foreach ($defaults as $key => $value) {
+    if (!isset($config[$key])) {
+        $config[$key] = $value;
+    }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!isset($_POST['csrf_token']) || !verifyCSRFToken($_POST['csrf_token'])) {
         $error = 'Error de seguridad. Recargue la pagina.';
     } else {
-        $campos = ['nombre_negocio', 'telefono_whatsapp', 'email_contacto', 'moneda_simbolo', 'moneda_nombre', 'mensaje_whatsapp', 'dias_alerta_vencimiento', 'moneda_fuente', 'mostrar_bs'];
-        foreach ($campos as $campo) {
-            if (isset($_POST[$campo])) {
-                $valor = sanitizeInput($_POST[$campo]);
-                $stmt = $conn->prepare("UPDATE configuracion SET valor = ? WHERE clave = ?");
-                $stmt->bind_param("ss", $valor, $campo);
+        $campos = [
+            'nombre_negocio',
+            'moneda_principal',
+            'tasa_cambio',
+            'banco',
+            'telefono_pago',
+            'cuenta_banco',
+            'mensaje_entrega',
+            'mensaje_cambio',
+            'mensaje_cobro',
+            'mensaje_renovar'
+        ];
+        
+        $conn->begin_transaction();
+        try {
+            foreach ($campos as $campo) {
+                $valor = $_POST[$campo] ?? '';
+                
+                // Verificar si existe
+                $stmt = $conn->prepare("SELECT id FROM configuracion WHERE clave = ?");
+                $stmt->bind_param("s", $campo);
+                $stmt->execute();
+                $existe = $stmt->get_result()->num_rows > 0;
+                $stmt->close();
+                
+                if ($existe) {
+                    $stmt = $conn->prepare("UPDATE configuracion SET valor = ? WHERE clave = ?");
+                    $stmt->bind_param("ss", $valor, $campo);
+                } else {
+                    $stmt = $conn->prepare("INSERT INTO configuracion (clave, valor) VALUES (?, ?)");
+                    $stmt->bind_param("ss", $campo, $valor);
+                }
                 $stmt->execute();
                 $stmt->close();
+                
+                $config[$campo] = $valor;
             }
+            
+            $conn->commit();
+            $mensaje = 'Configuracion guardada correctamente';
+            logActivity('configuracion_actualizada', 'Configuracion general');
+        } catch (Exception $e) {
+            $conn->rollback();
+            $error = 'Error al guardar la configuracion';
         }
-        $mensaje = 'Configuracion guardada correctamente';
-        logActivity('configuracion_actualizada', 'Configuracion del sistema actualizada');
     }
-}
-
-if (isset($_GET['msg']) && $_GET['msg'] === 'tasa_actualizada') {
-    $mensaje = 'Tasa de cambio actualizada correctamente';
-}
-
-$config = [];
-$result = $conn->query("SELECT clave, valor, descripcion FROM configuracion");
-while ($row = $result->fetch_assoc()) {
-    $config[$row['clave']] = ['valor' => $row['valor'], 'descripcion' => $row['descripcion']];
 }
 
 $pageTitle = 'Configuracion';
@@ -124,114 +176,207 @@ require_once '../includes/header.php';
             <form method="POST" class="space-y-6">
                 <?php echo csrfField(); ?>
                 
+                <!-- Configuración General -->
                 <div class="bg-light-card dark:bg-dark-card rounded-xl border border-light-border dark:border-dark-border overflow-hidden">
-                    <div class="p-4 border-b border-light-border dark:border-dark-border"><h2 class="font-semibold text-slate-800 dark:text-white">Informacion del Negocio</h2></div>
+                    <div class="p-4 border-b border-light-border dark:border-dark-border">
+                        <h2 class="font-semibold text-slate-800 dark:text-white">General</h2>
+                    </div>
+                    <div class="p-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Nombre del Negocio</label>
+                            <input type="text" name="nombre_negocio" value="<?php echo e($config['nombre_negocio']); ?>" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Moneda Principal</label>
+                            <select name="moneda_principal" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white">
+                                <option value="USD" <?php echo $config['moneda_principal'] === 'USD' ? 'selected' : ''; ?>>Dolares (USD)</option>
+                                <option value="BS" <?php echo $config['moneda_principal'] === 'BS' ? 'selected' : ''; ?>>Bolivares (Bs)</option>
+                            </select>
+                            <p class="text-xs text-slate-400 mt-1">Afecta la variable {precio} en mensajes</p>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Tasa de Cambio (1 USD = X Bs)</label>
+                            <div class="flex gap-2">
+                                <input type="number" step="0.01" name="tasa_cambio" id="tasa_cambio" value="<?php echo e($config['tasa_cambio']); ?>" class="flex-1 px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white" placeholder="50.00">
+                            </div>
+                            <div class="flex gap-2 mt-2">
+                                <button type="button" onclick="obtenerTasaParalelo()" class="flex-1 px-3 py-1.5 text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-lg hover:bg-green-200 dark:hover:bg-green-900/50">
+                                    <span id="btnParalelo">Paralelo</span>
+                                </button>
+                                <button type="button" onclick="obtenerTasaBCV()" class="flex-1 px-3 py-1.5 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-900/50">
+                                    <span id="btnBCV">BCV</span>
+                                </button>
+                                <button type="button" onclick="obtenerTasaBinance()" class="flex-1 px-3 py-1.5 text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-900/50">
+                                    <span id="btnBinance">Binance</span>
+                                </button>
+                            </div>
+                            <p class="text-xs text-slate-400 mt-1">Click en un boton para actualizar automaticamente</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Datos Bancarios -->
+                <div class="bg-light-card dark:bg-dark-card rounded-xl border border-light-border dark:border-dark-border overflow-hidden">
+                    <div class="p-4 border-b border-light-border dark:border-dark-border">
+                        <h2 class="font-semibold text-slate-800 dark:text-white">Datos de Pago</h2>
+                        <p class="text-sm text-slate-500">Se usan en el mensaje de cobro</p>
+                    </div>
+                    <div class="p-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Banco</label>
+                            <input type="text" name="banco" value="<?php echo e($config['banco']); ?>" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white" placeholder="Banco de Venezuela">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Telefono Pago Movil</label>
+                            <input type="text" name="telefono_pago" value="<?php echo e($config['telefono_pago']); ?>" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white" placeholder="04145116337">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Numero de Cuenta</label>
+                            <input type="text" name="cuenta_banco" value="<?php echo e($config['cuenta_banco']); ?>" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white" placeholder="13313482 (0102)">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Mensajes WhatsApp -->
+                <div class="bg-light-card dark:bg-dark-card rounded-xl border border-light-border dark:border-dark-border overflow-hidden">
+                    <div class="p-4 border-b border-light-border dark:border-dark-border">
+                        <h2 class="font-semibold text-slate-800 dark:text-white">Mensajes de WhatsApp</h2>
+                        <p class="text-sm text-slate-500">Variables: {cliente}, {servicio}, {cuenta}, {password}, {perfil}, {pin}, {fecha_compra}, {vencimiento}, {precio}, {precio_usd}, {precio_bs}, {banco}, {telefono_pago}, {cuenta_banco}</p>
+                    </div>
                     <div class="p-4 space-y-4">
+                        <!-- Mensaje Entrega -->
                         <div>
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Nombre del negocio</label>
-                            <input type="text" name="nombre_negocio" value="<?php echo e($config['nombre_negocio']['valor'] ?? ''); ?>" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white">
-                        </div>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">WhatsApp Soporte</label>
-                                <input type="text" name="telefono_whatsapp" value="<?php echo e($config['telefono_whatsapp']['valor'] ?? ''); ?>" placeholder="+584141234567" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white">
+                            <div class="flex items-center gap-2 mb-2">
+                                <span class="w-3 h-3 rounded-full bg-green-500"></span>
+                                <label class="text-sm font-medium text-slate-700 dark:text-slate-300">Mensaje de Entrega</label>
                             </div>
-                            <div>
-                                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Email contacto</label>
-                                <input type="email" name="email_contacto" value="<?php echo e($config['email_contacto']['valor'] ?? ''); ?>" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white">
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="bg-light-card dark:bg-dark-card rounded-xl border border-light-border dark:border-dark-border overflow-hidden">
-                    <div class="p-4 border-b border-light-border dark:border-dark-border"><h2 class="font-semibold text-slate-800 dark:text-white">Moneda Principal</h2></div>
-                    <div class="p-4 grid grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Simbolo</label>
-                            <input type="text" name="moneda_simbolo" value="<?php echo e($config['moneda_simbolo']['valor'] ?? '$'); ?>" maxlength="5" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Nombre</label>
-                            <input type="text" name="moneda_nombre" value="<?php echo e($config['moneda_nombre']['valor'] ?? 'USD'); ?>" maxlength="10" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white">
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="bg-light-card dark:bg-dark-card rounded-xl border border-light-border dark:border-dark-border overflow-hidden">
-                    <div class="p-4 border-b border-light-border dark:border-dark-border"><h2 class="font-semibold text-slate-800 dark:text-white flex items-center gap-2"><svg class="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>Tasa de Cambio (USD/Bs)</h2></div>
-                    <div class="p-4 space-y-4">
-                        <?php 
-                        require_once '../includes/moneda.php';
-                        $infoTasa = obtenerInfoTasa();
-                        $todasTasas = obtenerTodasLasTasas();
-                        ?>
-                        
-                        <div class="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                            <div class="flex items-center justify-between flex-wrap gap-4">
-                                <div>
-                                    <p class="text-sm text-blue-600 dark:text-blue-400">Tasa actual (<?php echo ucfirst($infoTasa['fuente']); ?>)</p>
-                                    <p class="text-2xl font-bold text-slate-800 dark:text-white">Bs. <?php echo number_format($infoTasa['tasa'], 2, ',', '.'); ?></p>
-                                    <?php if ($infoTasa['actualizado']): ?><p class="text-xs text-slate-500 mt-1">Actualizado: <?php echo date('d/m/Y H:i', strtotime($infoTasa['actualizado'])); ?></p><?php endif; ?>
-                                </div>
-                                <a href="?actualizar_tasa=1" class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded-lg">Actualizar</a>
-                            </div>
+                            <textarea name="mensaje_entrega" rows="8" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white font-mono text-sm"><?php echo e($config['mensaje_entrega']); ?></textarea>
+                            <p class="text-xs text-slate-400 mt-1">Se envia al vender un perfil</p>
                         </div>
                         
-                        <?php if (!empty($todasTasas)): ?>
-                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-                            <?php foreach ($todasTasas as $t): ?>
-                            <div class="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg text-center">
-                                <p class="text-xs text-slate-500 mb-1"><?php echo e($t['nombre']); ?></p>
-                                <p class="font-bold text-slate-800 dark:text-white"><?php echo number_format($t['tasa'], 2, ',', '.'); ?></p>
+                        <!-- Mensaje Cambio -->
+                        <div>
+                            <div class="flex items-center gap-2 mb-2">
+                                <span class="w-3 h-3 rounded-full bg-amber-500"></span>
+                                <label class="text-sm font-medium text-slate-700 dark:text-slate-300">Mensaje de Cambio</label>
                             </div>
-                            <?php endforeach; ?>
+                            <textarea name="mensaje_cambio" rows="8" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white font-mono text-sm"><?php echo e($config['mensaje_cambio']); ?></textarea>
+                            <p class="text-xs text-slate-400 mt-1">Se envia cuando cambia la contrasena o datos</p>
                         </div>
-                        <?php endif; ?>
                         
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Fuente de tasa</label>
-                                <select name="moneda_fuente" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white">
-                                    <option value="bcv" <?php echo ($config['moneda_fuente']['valor'] ?? '') === 'bcv' ? 'selected' : ''; ?>>BCV (Oficial)</option>
-                                    <option value="paralelo" <?php echo ($config['moneda_fuente']['valor'] ?? '') === 'paralelo' ? 'selected' : ''; ?>>Paralelo</option>
-                                </select>
+                        <!-- Mensaje Cobro -->
+                        <div>
+                            <div class="flex items-center gap-2 mb-2">
+                                <span class="w-3 h-3 rounded-full bg-blue-500"></span>
+                                <label class="text-sm font-medium text-slate-700 dark:text-slate-300">Mensaje de Cobro</label>
                             </div>
-                            <div>
-                                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Mostrar en Bolivares</label>
-                                <select name="mostrar_bs" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white">
-                                    <option value="1" <?php echo ($config['mostrar_bs']['valor'] ?? '1') === '1' ? 'selected' : ''; ?>>Si</option>
-                                    <option value="0" <?php echo ($config['mostrar_bs']['valor'] ?? '1') === '0' ? 'selected' : ''; ?>>No</option>
-                                </select>
+                            <textarea name="mensaje_cobro" rows="12" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white font-mono text-sm"><?php echo e($config['mensaje_cobro']); ?></textarea>
+                            <p class="text-xs text-slate-400 mt-1">Se envia como recordatorio de pago</p>
+                        </div>
+                        
+                        <!-- Mensaje Renovar -->
+                        <div>
+                            <div class="flex items-center gap-2 mb-2">
+                                <span class="w-3 h-3 rounded-full bg-purple-500"></span>
+                                <label class="text-sm font-medium text-slate-700 dark:text-slate-300">Mensaje de Renovacion</label>
                             </div>
+                            <textarea name="mensaje_renovar" rows="6" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white font-mono text-sm"><?php echo e($config['mensaje_renovar']); ?></textarea>
+                            <p class="text-xs text-slate-400 mt-1">Se envia al confirmar el pago y renovar</p>
                         </div>
                     </div>
                 </div>
                 
-                <div class="bg-light-card dark:bg-dark-card rounded-xl border border-light-border dark:border-dark-border overflow-hidden">
-                    <div class="p-4 border-b border-light-border dark:border-dark-border"><h2 class="font-semibold text-slate-800 dark:text-white">Plantilla WhatsApp</h2></div>
-                    <div class="p-4">
-                        <textarea name="mensaje_whatsapp" rows="6" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white font-mono text-sm"><?php echo e($config['mensaje_whatsapp']['valor'] ?? ''); ?></textarea>
-                        <p class="text-xs text-slate-500 mt-2">Variables: {cliente} {servicio} {cuenta} {password} {perfil} {vencimiento}</p>
-                    </div>
+                <div class="flex justify-end">
+                    <button type="submit" class="px-6 py-2 bg-primary-500 hover:bg-primary-600 text-white font-medium rounded-lg">Guardar Configuracion</button>
                 </div>
-                
-                <div class="bg-light-card dark:bg-dark-card rounded-xl border border-light-border dark:border-dark-border overflow-hidden">
-                    <div class="p-4 border-b border-light-border dark:border-dark-border"><h2 class="font-semibold text-slate-800 dark:text-white">Alertas</h2></div>
-                    <div class="p-4">
-                        <div class="max-w-xs">
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Dias antes de vencimiento</label>
-                            <input type="number" name="dias_alerta_vencimiento" value="<?php echo e($config['dias_alerta_vencimiento']['valor'] ?? '7'); ?>" min="1" max="30" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white">
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="flex justify-end"><button type="submit" class="px-6 py-3 bg-primary-500 hover:bg-primary-600 text-white font-medium rounded-lg">Guardar Configuracion</button></div>
             </form>
         </main>
     </div>
 </div>
 
-<script>function toggleSidebar(){document.getElementById('sidebar').classList.toggle('-translate-x-full');document.getElementById('sidebarOverlay').classList.toggle('hidden');}</script>
+<script>
+function toggleSidebar() {
+    document.getElementById('sidebar').classList.toggle('-translate-x-full');
+    document.getElementById('sidebarOverlay').classList.toggle('hidden');
+}
+
+// Obtener tasa del Dólar Paralelo
+async function obtenerTasaParalelo() {
+    const btn = document.getElementById('btnParalelo');
+    const original = btn.textContent;
+    btn.textContent = 'Cargando...';
+    
+    try {
+        const response = await fetch('ajax/obtener_tasa.php?fuente=paralelo');
+        const data = await response.json();
+        
+        if (data.success && data.tasa) {
+            document.getElementById('tasa_cambio').value = data.tasa;
+            btn.textContent = 'Bs ' + data.tasa;
+            setTimeout(() => btn.textContent = original, 3000);
+        } else {
+            btn.textContent = 'Error';
+            setTimeout(() => btn.textContent = original, 2000);
+            alert(data.error || 'No se pudo obtener la tasa');
+        }
+    } catch (error) {
+        btn.textContent = 'Error';
+        setTimeout(() => btn.textContent = original, 2000);
+        alert('Error de conexion');
+    }
+}
+
+// Obtener tasa del BCV
+async function obtenerTasaBCV() {
+    const btn = document.getElementById('btnBCV');
+    const original = btn.textContent;
+    btn.textContent = 'Cargando...';
+    
+    try {
+        const response = await fetch('ajax/obtener_tasa.php?fuente=bcv');
+        const data = await response.json();
+        
+        if (data.success && data.tasa) {
+            document.getElementById('tasa_cambio').value = data.tasa;
+            btn.textContent = 'Bs ' + data.tasa;
+            setTimeout(() => btn.textContent = original, 3000);
+        } else {
+            btn.textContent = 'Error';
+            setTimeout(() => btn.textContent = original, 2000);
+            alert(data.error || 'No se pudo obtener la tasa');
+        }
+    } catch (error) {
+        btn.textContent = 'Error';
+        setTimeout(() => btn.textContent = original, 2000);
+        alert('Error de conexion');
+    }
+}
+
+// Obtener tasa de Binance P2P
+async function obtenerTasaBinance() {
+    const btn = document.getElementById('btnBinance');
+    const original = btn.textContent;
+    btn.textContent = 'Cargando...';
+    
+    try {
+        const response = await fetch('ajax/obtener_tasa.php?fuente=binance');
+        const data = await response.json();
+        
+        if (data.success && data.tasa) {
+            document.getElementById('tasa_cambio').value = data.tasa;
+            btn.textContent = 'Bs ' + data.tasa;
+            setTimeout(() => btn.textContent = original, 3000);
+        } else {
+            btn.textContent = 'Error';
+            setTimeout(() => btn.textContent = original, 2000);
+            alert(data.error || 'No se pudo obtener la tasa');
+        }
+    } catch (error) {
+        btn.textContent = 'Error';
+        setTimeout(() => btn.textContent = original, 2000);
+        alert('Error de conexion');
+    }
+}
+</script>
 
 <?php require_once '../includes/footer.php'; ?>

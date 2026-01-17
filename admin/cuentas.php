@@ -18,15 +18,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $proveedor_id = sanitizeInt($_POST['proveedor_id'] ?? 0);
             $cuenta = sanitizeInput($_POST['cuenta'] ?? '');
             $password = sanitizeInput($_POST['password_cuenta'] ?? '');
-            $total_perfiles = sanitizeInt($_POST['total_perfiles'] ?? 1);
-            $costo_compra = sanitizeDecimal($_POST['costo_compra'] ?? 0);
+            $costo_compra = floatval($_POST['costo_compra'] ?? 0);
+            $precio_venta = floatval($_POST['precio_venta'] ?? 0);
             $fecha_compra = $_POST['fecha_compra'] ?? date('Y-m-d');
             $fecha_vencimiento = $_POST['fecha_vencimiento'] ?? '';
             
+            // Obtener num_perfiles del servicio
+            $stmtServ = $conn->prepare("SELECT num_perfiles FROM servicios WHERE id = ?");
+            $stmtServ->bind_param("i", $servicio_id);
+            $stmtServ->execute();
+            $resServ = $stmtServ->get_result()->fetch_assoc();
+            $total_perfiles = $resServ ? ($resServ['num_perfiles'] ?? 5) : 5;
+            $stmtServ->close();
+            
+            // Obtener los PINs del formulario
+            $pins = [];
+            for ($i = 1; $i <= $total_perfiles; $i++) {
+                $pins[$i] = sanitizeInput($_POST['pin_' . $i] ?? '');
+            }
+            
             if (empty($cuenta) || $servicio_id <= 0 || $proveedor_id <= 0) {
                 $error = 'Complete los campos obligatorios';
-            } else if ($total_perfiles < 1 || $total_perfiles > 6) {
-                $error = 'El numero de perfiles debe ser entre 1 y 6';
             } else {
                 $stmt = $conn->prepare("SELECT id FROM cuentas WHERE cuenta = ?");
                 $stmt->bind_param("s", $cuenta);
@@ -36,14 +48,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } else {
                     $conn->begin_transaction();
                     try {
-                        $stmt = $conn->prepare("INSERT INTO cuentas (servicio_id, proveedor_id, cuenta, password, total_perfiles, costo_compra, fecha_compra, fecha_vencimiento, estado) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'activa')");
-                        $stmt->bind_param("iissidss", $servicio_id, $proveedor_id, $cuenta, $password, $total_perfiles, $costo_compra, $fecha_compra, $fecha_vencimiento);
+                        $stmt = $conn->prepare("INSERT INTO cuentas (servicio_id, proveedor_id, cuenta, password, total_perfiles, costo_compra, precio_venta, fecha_compra, fecha_vencimiento, estado) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'activa')");
+                        $stmt->bind_param("iissiddss", $servicio_id, $proveedor_id, $cuenta, $password, $total_perfiles, $costo_compra, $precio_venta, $fecha_compra, $fecha_vencimiento);
                         $stmt->execute();
                         $cuenta_id = $conn->insert_id;
                         
-                        $stmtPerfil = $conn->prepare("INSERT INTO perfiles (cuenta_id, numero_perfil, estado) VALUES (?, ?, 'disponible')");
+                        // Crear perfiles con PIN
+                        $stmtPerfil = $conn->prepare("INSERT INTO perfiles (cuenta_id, numero_perfil, pin, estado) VALUES (?, ?, ?, 'disponible')");
                         for ($i = 1; $i <= $total_perfiles; $i++) {
-                            $stmtPerfil->bind_param("ii", $cuenta_id, $i);
+                            $pin = $pins[$i];
+                            $stmtPerfil->bind_param("iis", $cuenta_id, $i, $pin);
                             $stmtPerfil->execute();
                         }
                         
@@ -65,7 +79,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $proveedor_id = sanitizeInt($_POST['proveedor_id'] ?? 0);
             $cuenta = sanitizeInput($_POST['cuenta'] ?? '');
             $password = sanitizeInput($_POST['password_cuenta'] ?? '');
-            $costo_compra = sanitizeDecimal($_POST['costo_compra'] ?? 0);
+            $costo_compra = floatval($_POST['costo_compra'] ?? 0);
+            $precio_venta = floatval($_POST['precio_venta'] ?? 0);
             $fecha_compra = $_POST['fecha_compra'] ?? '';
             $fecha_vencimiento = $_POST['fecha_vencimiento'] ?? '';
             
@@ -78,12 +93,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($stmt->get_result()->num_rows > 0) {
                     $error = 'Ya existe otra cuenta con ese correo';
                 } else {
-                    $stmt = $conn->prepare("UPDATE cuentas SET servicio_id=?, proveedor_id=?, cuenta=?, password=?, costo_compra=?, fecha_compra=?, fecha_vencimiento=? WHERE id=?");
-                    $stmt->bind_param("iissdssi", $servicio_id, $proveedor_id, $cuenta, $password, $costo_compra, $fecha_compra, $fecha_vencimiento, $id);
-                    if ($stmt->execute()) {
+                    $conn->begin_transaction();
+                    try {
+                        // Actualizar cuenta
+                        $stmt = $conn->prepare("UPDATE cuentas SET servicio_id=?, proveedor_id=?, cuenta=?, password=?, costo_compra=?, precio_venta=?, fecha_compra=?, fecha_vencimiento=? WHERE id=?");
+                        $stmt->bind_param("iissddssi", $servicio_id, $proveedor_id, $cuenta, $password, $costo_compra, $precio_venta, $fecha_compra, $fecha_vencimiento, $id);
+                        $stmt->execute();
+                        
+                        // Actualizar PINs de perfiles
+                        $perfilesData = $_POST['perfiles'] ?? [];
+                        foreach ($perfilesData as $perfil_id => $pin) {
+                            $perfil_id = sanitizeInt($perfil_id);
+                            $pin = sanitizeInput($pin);
+                            $stmtPin = $conn->prepare("UPDATE perfiles SET pin = ? WHERE id = ? AND cuenta_id = ?");
+                            $stmtPin->bind_param("sii", $pin, $perfil_id, $id);
+                            $stmtPin->execute();
+                            $stmtPin->close();
+                        }
+                        
+                        $conn->commit();
                         $mensaje = 'Cuenta actualizada';
                         logActivity('cuenta_editada', 'Cuenta ID: ' . $id);
-                    } else {
+                    } catch (Exception $e) {
+                        $conn->rollback();
                         $error = 'Error al actualizar';
                     }
                 }
@@ -100,6 +132,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $mensaje = 'Estado actualizado';
             }
             $stmt->close();
+        }
+        
+        if ($accion === 'eliminar') {
+            $id = sanitizeInt($_POST['id'] ?? 0);
+            
+            // Verificar si tiene perfiles vendidos
+            $stmtCheck = $conn->prepare("SELECT COUNT(*) as vendidos FROM perfiles WHERE cuenta_id = ? AND estado = 'vendido'");
+            $stmtCheck->bind_param("i", $id);
+            $stmtCheck->execute();
+            $checkResult = $stmtCheck->get_result()->fetch_assoc();
+            $stmtCheck->close();
+            
+            if ($checkResult['vendidos'] > 0) {
+                $error = 'No se puede eliminar: tiene ' . $checkResult['vendidos'] . ' perfil(es) vendido(s)';
+            } else {
+                $conn->begin_transaction();
+                try {
+                    // Eliminar perfiles
+                    $stmt = $conn->prepare("DELETE FROM perfiles WHERE cuenta_id = ?");
+                    $stmt->bind_param("i", $id);
+                    $stmt->execute();
+                    $stmt->close();
+                    
+                    // Eliminar cuenta
+                    $stmt = $conn->prepare("DELETE FROM cuentas WHERE id = ?");
+                    $stmt->bind_param("i", $id);
+                    $stmt->execute();
+                    $stmt->close();
+                    
+                    $conn->commit();
+                    $mensaje = 'Cuenta eliminada';
+                    logActivity('cuenta_eliminada', 'Cuenta ID: ' . $id);
+                } catch (Exception $e) {
+                    $conn->rollback();
+                    $error = 'Error al eliminar';
+                }
+            }
         }
     }
 }
@@ -129,7 +198,8 @@ if (!empty($params)) {
     $cuentas = $conn->query($sql)->fetch_all(MYSQLI_ASSOC);
 }
 
-$servicios = $conn->query("SELECT * FROM servicios WHERE estado = 'activo' ORDER BY nombre")->fetch_all(MYSQLI_ASSOC);
+// Obtener servicios con num_perfiles
+$servicios = $conn->query("SELECT id, nombre, num_perfiles FROM servicios WHERE estado = 'activo' ORDER BY nombre")->fetch_all(MYSQLI_ASSOC);
 $proveedores = $conn->query("SELECT * FROM proveedores WHERE estado = 'activo' ORDER BY nombre")->fetch_all(MYSQLI_ASSOC);
 $todosServicios = $conn->query("SELECT * FROM servicios ORDER BY nombre")->fetch_all(MYSQLI_ASSOC);
 
@@ -227,6 +297,7 @@ require_once '../includes/header.php';
                                 <button onclick="verPerfiles(<?php echo $c['id']; ?>)" class="p-2 text-slate-500 hover:text-blue-500 rounded-lg" title="Ver perfiles"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg></button>
                                 <button onclick="openModal('editar', <?php echo htmlspecialchars(json_encode($c)); ?>)" class="p-2 text-slate-500 hover:text-primary-500 rounded-lg" title="Editar"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg></button>
                                 <form method="POST" class="inline" onsubmit="return confirm('¿Cambiar estado?')"><?php echo csrfField(); ?><input type="hidden" name="accion" value="cambiar_estado"><input type="hidden" name="id" value="<?php echo $c['id']; ?>"><input type="hidden" name="estado" value="<?php echo $c['estado']; ?>"><button type="submit" class="p-2 text-slate-500 hover:text-amber-500 rounded-lg" title="Cambiar estado"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg></button></form>
+                                <form method="POST" class="inline" onsubmit="return confirm('¿Eliminar esta cuenta? Solo se puede si no tiene perfiles vendidos.')"><?php echo csrfField(); ?><input type="hidden" name="accion" value="eliminar"><input type="hidden" name="id" value="<?php echo $c['id']; ?>"><button type="submit" class="p-2 text-slate-500 hover:text-red-500 rounded-lg" title="Eliminar"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button></form>
                             </div></td>
                         </tr>
                         <?php endforeach; ?>
@@ -255,44 +326,303 @@ require_once '../includes/header.php';
     </div>
 </div>
 
+<!-- Modal Crear/Editar -->
 <div id="modal" class="fixed inset-0 z-50 hidden">
     <div class="absolute inset-0 bg-black/50" onclick="closeModal()"></div>
     <div class="absolute inset-4 sm:inset-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:w-full sm:max-w-lg bg-light-card dark:bg-dark-card rounded-xl shadow-xl max-h-[90vh] overflow-y-auto">
-        <div class="flex items-center justify-between p-4 border-b border-light-border dark:border-dark-border"><h3 id="modalTitle" class="font-semibold text-slate-800 dark:text-white">Nueva Cuenta</h3><button onclick="closeModal()" class="p-2 text-slate-400"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button></div>
+        <div class="flex items-center justify-between p-4 border-b border-light-border dark:border-dark-border">
+            <h3 id="modalTitle" class="font-semibold text-slate-800 dark:text-white">Nueva Cuenta</h3>
+            <button onclick="closeModal()" class="p-2 text-slate-400"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
+        </div>
         <form method="POST" class="p-4">
             <?php echo csrfField(); ?>
             <input type="hidden" name="accion" id="formAccion" value="crear">
             <input type="hidden" name="id" id="formId" value="">
+            
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Servicio *</label><select name="servicio_id" id="servicio_id" required class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white"><option value="">Seleccionar...</option><?php foreach ($servicios as $s): ?><option value="<?php echo $s['id']; ?>"><?php echo e($s['nombre']); ?></option><?php endforeach; ?></select></div>
-                <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Proveedor *</label><select name="proveedor_id" id="proveedor_id" required class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white"><option value="">Seleccionar...</option><?php foreach ($proveedores as $p): ?><option value="<?php echo $p['id']; ?>"><?php echo e($p['nombre']); ?></option><?php endforeach; ?></select></div>
-                <div class="sm:col-span-2"><label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Correo/Usuario *</label><input type="text" name="cuenta" id="cuenta" required maxlength="100" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white" placeholder="correo@ejemplo.com"></div>
-                <div class="sm:col-span-2"><label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Contrasena</label><input type="text" name="password_cuenta" id="password_cuenta" maxlength="100" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white"></div>
-                <div id="perfilesContainer"><label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Perfiles (1-6) *</label><input type="number" name="total_perfiles" id="total_perfiles" min="1" max="6" value="1" required class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white"></div>
-                <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Costo (USD)</label><input type="number" name="costo_compra" id="costo_compra" step="0.01" min="0" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white" placeholder="0.00"></div>
-                <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Fecha compra</label><input type="date" name="fecha_compra" id="fecha_compra" value="<?php echo date('Y-m-d'); ?>" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white"></div>
-                <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Fecha vencimiento</label><input type="date" name="fecha_vencimiento" id="fecha_vencimiento" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white"></div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Servicio *</label>
+                    <select name="servicio_id" id="servicio_id" required onchange="generarCamposPIN()" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white">
+                        <option value="">Seleccionar...</option>
+                        <?php foreach ($servicios as $s): ?>
+                        <option value="<?php echo $s['id']; ?>" data-perfiles="<?php echo $s['num_perfiles'] ?? 5; ?>"><?php echo e($s['nombre']); ?> (<?php echo $s['num_perfiles'] ?? 5; ?> perfiles)</option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Proveedor *</label>
+                    <select name="proveedor_id" id="proveedor_id" required class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white">
+                        <option value="">Seleccionar...</option>
+                        <?php foreach ($proveedores as $p): ?>
+                        <option value="<?php echo $p['id']; ?>"><?php echo e($p['nombre']); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="sm:col-span-2">
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Correo/Usuario *</label>
+                    <input type="text" name="cuenta" id="cuenta" required maxlength="100" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white" placeholder="correo@ejemplo.com">
+                </div>
+                <div class="sm:col-span-2">
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Contrasena de la cuenta</label>
+                    <input type="text" name="password_cuenta" id="password_cuenta" maxlength="100" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white" placeholder="Contrasena de acceso">
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Costo Compra *</label>
+                    <div class="relative">
+                        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">$</span>
+                        <input type="number" name="costo_compra" id="costo_compra" step="0.01" min="0" required class="w-full pl-8 pr-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white" placeholder="0.00" onchange="calcularUtilidad()">
+                    </div>
+                    <p class="text-xs text-slate-400 mt-1">Total pagado por la cuenta</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Precio Venta *</label>
+                    <div class="relative">
+                        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">$</span>
+                        <input type="number" name="precio_venta" id="precio_venta" step="0.01" min="0" required class="w-full pl-8 pr-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white" placeholder="0.00" onchange="calcularUtilidad()">
+                    </div>
+                    <p class="text-xs text-slate-400 mt-1">Precio por cada perfil</p>
+                </div>
+                
+                <div class="sm:col-span-2">
+                    <p class="text-sm text-slate-600 dark:text-slate-300">Utilidad por perfil: <span id="utilidadPerfil" class="font-bold text-green-600">$0.00</span></p>
+                </div>
+                
+                <!-- Contenedor de Perfiles/PINs -->
+                <div id="perfilesContainer" class="sm:col-span-2 hidden">
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Perfiles y PINs</label>
+                    <div id="perfilesFields" class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        <!-- Se genera dinámicamente -->
+                    </div>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Fecha compra</label>
+                    <input type="date" name="fecha_compra" id="fecha_compra" value="<?php echo date('Y-m-d'); ?>" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Fecha vencimiento</label>
+                    <input type="date" name="fecha_vencimiento" id="fecha_vencimiento" class="w-full px-4 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white">
+                </div>
             </div>
-            <div class="flex gap-3 mt-6"><button type="button" onclick="closeModal()" class="flex-1 px-4 py-2 border border-light-border dark:border-dark-border text-slate-600 dark:text-slate-300 rounded-lg">Cancelar</button><button type="submit" class="flex-1 px-4 py-2 bg-primary-500 text-white rounded-lg">Guardar</button></div>
+            
+            <div class="flex gap-3 mt-6">
+                <button type="button" onclick="closeModal()" class="flex-1 px-4 py-2 border border-light-border dark:border-dark-border text-slate-600 dark:text-slate-300 rounded-lg">Cancelar</button>
+                <button type="submit" class="flex-1 px-4 py-2 bg-primary-500 text-white rounded-lg">Guardar</button>
+            </div>
         </form>
     </div>
 </div>
 
+<!-- Modal Ver Perfiles -->
 <div id="modalPerfiles" class="fixed inset-0 z-50 hidden">
     <div class="absolute inset-0 bg-black/50" onclick="closeModalPerfiles()"></div>
     <div class="absolute inset-4 sm:inset-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:w-full sm:max-w-md bg-light-card dark:bg-dark-card rounded-xl shadow-xl max-h-[90vh] overflow-y-auto">
-        <div class="flex items-center justify-between p-4 border-b border-light-border dark:border-dark-border"><h3 class="font-semibold text-slate-800 dark:text-white">Perfiles de la Cuenta</h3><button onclick="closeModalPerfiles()" class="p-2 text-slate-400"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button></div>
+        <div class="flex items-center justify-between p-4 border-b border-light-border dark:border-dark-border">
+            <h3 class="font-semibold text-slate-800 dark:text-white">Perfiles de la Cuenta</h3>
+            <button onclick="closeModalPerfiles()" class="p-2 text-slate-400"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
+        </div>
         <div id="perfilesContent" class="p-4"><p class="text-center text-slate-500">Cargando...</p></div>
     </div>
 </div>
 
 <script>
-function toggleSidebar(){document.getElementById('sidebar').classList.toggle('-translate-x-full');document.getElementById('sidebarOverlay').classList.toggle('hidden');}
-function openModal(tipo,data=null){const m=document.getElementById('modal');document.getElementById('formId').value='';document.getElementById('servicio_id').value='';document.getElementById('proveedor_id').value='';document.getElementById('cuenta').value='';document.getElementById('password_cuenta').value='';document.getElementById('total_perfiles').value='1';document.getElementById('costo_compra').value='';document.getElementById('fecha_compra').value='<?php echo date('Y-m-d'); ?>';document.getElementById('fecha_vencimiento').value='';if(tipo==='crear'){document.getElementById('modalTitle').textContent='Nueva Cuenta';document.getElementById('formAccion').value='crear';document.getElementById('perfilesContainer').style.display='block';}else{document.getElementById('modalTitle').textContent='Editar Cuenta';document.getElementById('formAccion').value='editar';document.getElementById('perfilesContainer').style.display='none';document.getElementById('formId').value=data.id;document.getElementById('servicio_id').value=data.servicio_id;document.getElementById('proveedor_id').value=data.proveedor_id;document.getElementById('cuenta').value=data.cuenta;document.getElementById('password_cuenta').value=data.password||'';document.getElementById('costo_compra').value=data.costo_compra||'';document.getElementById('fecha_compra').value=data.fecha_compra||'';document.getElementById('fecha_vencimiento').value=data.fecha_vencimiento||'';}m.classList.remove('hidden');}
-function closeModal(){document.getElementById('modal').classList.add('hidden');}
-function verPerfiles(cuentaId){document.getElementById('modalPerfiles').classList.remove('hidden');document.getElementById('perfilesContent').innerHTML='<p class="text-center text-slate-500">Cargando...</p>';fetch('ajax/get_perfiles.php?cuenta_id='+cuentaId).then(r=>r.json()).then(data=>{if(data.success){let html='<div class="space-y-2">';data.perfiles.forEach(p=>{const cls=p.estado==='disponible'?'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400':'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400';html+=`<div class="flex items-center justify-between p-3 bg-light-bg dark:bg-dark-bg rounded-lg"><div class="flex items-center gap-3"><span class="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-sm font-medium text-slate-600 dark:text-slate-300">${p.numero_perfil}</span><span class="text-sm font-medium text-slate-800 dark:text-white">Perfil ${p.numero_perfil}</span></div><span class="px-2 py-1 text-xs font-medium rounded-full ${cls}">${p.estado.charAt(0).toUpperCase()+p.estado.slice(1)}</span></div>`;});html+='</div>';document.getElementById('perfilesContent').innerHTML=html;}else{document.getElementById('perfilesContent').innerHTML='<p class="text-center text-red-500">Error</p>';}}).catch(()=>{document.getElementById('perfilesContent').innerHTML='<p class="text-center text-red-500">Error de conexion</p>';});}
-function closeModalPerfiles(){document.getElementById('modalPerfiles').classList.add('hidden');}
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();closeModalPerfiles();}});
+const serviciosData = <?php echo json_encode($servicios); ?>;
+
+function toggleSidebar() {
+    document.getElementById('sidebar').classList.toggle('-translate-x-full');
+    document.getElementById('sidebarOverlay').classList.toggle('hidden');
+}
+
+function calcularUtilidad() {
+    const costoCompra = parseFloat(document.getElementById('costo_compra').value) || 0;
+    const precioVenta = parseFloat(document.getElementById('precio_venta').value) || 0;
+    const servicioSelect = document.getElementById('servicio_id');
+    const selectedOption = servicioSelect.options[servicioSelect.selectedIndex];
+    const numPerfiles = parseInt(selectedOption?.dataset?.perfiles) || 1;
+    
+    const costoPorPerfil = numPerfiles > 0 ? costoCompra / numPerfiles : 0;
+    const utilidad = precioVenta - costoPorPerfil;
+    
+    const utilidadEl = document.getElementById('utilidadPerfil');
+    utilidadEl.textContent = '$' + utilidad.toFixed(2);
+    utilidadEl.className = 'font-bold ' + (utilidad >= 0 ? 'text-green-600' : 'text-red-600');
+}
+
+function generarCamposPIN() {
+    const servicioSelect = document.getElementById('servicio_id');
+    const perfilesContainer = document.getElementById('perfilesContainer');
+    const perfilesFields = document.getElementById('perfilesFields');
+    const formAccion = document.getElementById('formAccion').value;
+    
+    // Solo mostrar PINs al crear (al editar se cargan via AJAX)
+    if (formAccion !== 'crear') {
+        return;
+    }
+    
+    const selectedOption = servicioSelect.options[servicioSelect.selectedIndex];
+    const numPerfiles = selectedOption?.dataset?.perfiles || 0;
+    
+    if (numPerfiles > 0) {
+        perfilesContainer.classList.remove('hidden');
+        let html = '';
+        for (let i = 1; i <= numPerfiles; i++) {
+            html += `
+                <div>
+                    <label class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Perfil ${i}</label>
+                    <input type="text" name="pin_${i}" maxlength="10" 
+                           class="w-full px-3 py-2 rounded-lg border border-light-border dark:border-dark-border bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-center"
+                           placeholder="PIN">
+                </div>
+            `;
+        }
+        perfilesFields.innerHTML = html;
+    } else {
+        perfilesContainer.classList.add('hidden');
+        perfilesFields.innerHTML = '';
+    }
+    
+    calcularUtilidad();
+}
+
+function cargarPerfilesParaEditar(cuentaId) {
+    const perfilesContainer = document.getElementById('perfilesContainer');
+    const perfilesFields = document.getElementById('perfilesFields');
+    
+    perfilesContainer.classList.remove('hidden');
+    perfilesFields.innerHTML = '<p class="text-sm text-slate-500 col-span-full text-center">Cargando perfiles...</p>';
+    
+    fetch('ajax/get_perfiles.php?cuenta_id=' + cuentaId)
+        .then(r => r.json())
+        .then(data => {
+            if (data.success && data.perfiles.length > 0) {
+                let html = '';
+                data.perfiles.forEach(p => {
+                    const estadoClass = p.estado === 'disponible' 
+                        ? 'border-green-400 dark:border-green-600' 
+                        : 'border-red-400 dark:border-red-600';
+                    const estadoBadge = p.estado === 'disponible'
+                        ? '<span class="text-xs text-green-600">Disp.</span>'
+                        : '<span class="text-xs text-red-600">Vend.</span>';
+                    
+                    html += `
+                        <div>
+                            <label class="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-1">
+                                <span>Perfil ${p.numero_perfil}</span>
+                                ${estadoBadge}
+                            </label>
+                            <input type="text" name="perfiles[${p.id}]" value="${p.pin || ''}" maxlength="10" 
+                                   class="w-full px-3 py-2 rounded-lg border-2 ${estadoClass} bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-center"
+                                   placeholder="PIN">
+                        </div>
+                    `;
+                });
+                perfilesFields.innerHTML = html;
+            } else {
+                perfilesFields.innerHTML = '<p class="text-sm text-red-500 col-span-full text-center">No se encontraron perfiles</p>';
+            }
+        })
+        .catch(() => {
+            perfilesFields.innerHTML = '<p class="text-sm text-red-500 col-span-full text-center">Error al cargar perfiles</p>';
+        });
+}
+
+function openModal(tipo, data = null) {
+    const modal = document.getElementById('modal');
+    const perfilesContainer = document.getElementById('perfilesContainer');
+    const perfilesFields = document.getElementById('perfilesFields');
+    
+    // Reset form
+    document.getElementById('formId').value = '';
+    document.getElementById('servicio_id').value = '';
+    document.getElementById('proveedor_id').value = '';
+    document.getElementById('cuenta').value = '';
+    document.getElementById('password_cuenta').value = '';
+    document.getElementById('costo_compra').value = '';
+    document.getElementById('precio_venta').value = '';
+    document.getElementById('fecha_compra').value = '<?php echo date('Y-m-d'); ?>';
+    document.getElementById('fecha_vencimiento').value = '';
+    document.getElementById('utilidadPerfil').textContent = '$0.00';
+    document.getElementById('utilidadPerfil').className = 'font-bold text-green-600';
+    perfilesContainer.classList.add('hidden');
+    perfilesFields.innerHTML = '';
+    
+    if (tipo === 'crear') {
+        document.getElementById('modalTitle').textContent = 'Nueva Cuenta';
+        document.getElementById('formAccion').value = 'crear';
+    } else {
+        document.getElementById('modalTitle').textContent = 'Editar Cuenta';
+        document.getElementById('formAccion').value = 'editar';
+        document.getElementById('formId').value = data.id;
+        document.getElementById('servicio_id').value = data.servicio_id;
+        document.getElementById('proveedor_id').value = data.proveedor_id;
+        document.getElementById('cuenta').value = data.cuenta;
+        document.getElementById('password_cuenta').value = data.password || '';
+        document.getElementById('costo_compra').value = data.costo_compra || '';
+        document.getElementById('precio_venta').value = data.precio_venta || '';
+        document.getElementById('fecha_compra').value = data.fecha_compra || '';
+        document.getElementById('fecha_vencimiento').value = data.fecha_vencimiento || '';
+        
+        // Cargar perfiles existentes para editar PINs
+        cargarPerfilesParaEditar(data.id);
+        calcularUtilidad();
+    }
+    
+    modal.classList.remove('hidden');
+}
+
+function closeModal() {
+    document.getElementById('modal').classList.add('hidden');
+}
+
+function verPerfiles(cuentaId) {
+    document.getElementById('modalPerfiles').classList.remove('hidden');
+    document.getElementById('perfilesContent').innerHTML = '<p class="text-center text-slate-500">Cargando...</p>';
+    
+    fetch('ajax/get_perfiles.php?cuenta_id=' + cuentaId)
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                let html = '<div class="space-y-3">';
+                data.perfiles.forEach(p => {
+                    const estadoClass = p.estado === 'disponible' 
+                        ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400' 
+                        : 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400';
+                    
+                    html += `
+                        <div class="flex items-center justify-between p-3 bg-light-bg dark:bg-dark-bg rounded-lg">
+                            <div class="flex items-center gap-3">
+                                <span class="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-sm font-medium text-slate-600 dark:text-slate-300">${p.numero_perfil}</span>
+                                <div>
+                                    <span class="text-sm font-medium text-slate-800 dark:text-white">Perfil ${p.numero_perfil}</span>
+                                    <p class="text-xs text-slate-500">PIN: <span class="font-mono font-semibold">${p.pin || 'Sin PIN'}</span></p>
+                                </div>
+                            </div>
+                            <span class="px-2 py-1 text-xs font-medium rounded-full ${estadoClass}">${p.estado.charAt(0).toUpperCase() + p.estado.slice(1)}</span>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+                document.getElementById('perfilesContent').innerHTML = html;
+            } else {
+                document.getElementById('perfilesContent').innerHTML = '<p class="text-center text-red-500">Error al cargar</p>';
+            }
+        })
+        .catch(() => {
+            document.getElementById('perfilesContent').innerHTML = '<p class="text-center text-red-500">Error de conexion</p>';
+        });
+}
+
+function closeModalPerfiles() {
+    document.getElementById('modalPerfiles').classList.add('hidden');
+}
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+        closeModal();
+        closeModalPerfiles();
+    }
+});
 </script>
 
 <?php require_once '../includes/footer.php'; ?>

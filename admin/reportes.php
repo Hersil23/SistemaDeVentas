@@ -20,32 +20,63 @@ switch ($periodo) {
     default: $fecha_inicio = date('Y-m-01'); $fecha_fin = date('Y-m-d');
 }
 
-// Resumen
-$stmt = $conn->prepare("SELECT COUNT(*) as total, COALESCE(SUM(precio_venta),0) as ingresos, COALESCE(AVG(precio_venta),0) as promedio, COUNT(CASE WHEN estado='activa' THEN 1 END) as activas FROM ventas WHERE fecha_venta BETWEEN ? AND ?");
+// Resumen con utilidad
+$stmt = $conn->prepare("SELECT 
+    COUNT(*) as total, 
+    COALESCE(SUM(precio_venta),0) as ingresos, 
+    COALESCE(SUM(precio_compra),0) as costos,
+    COALESCE(SUM(precio_venta - precio_compra),0) as utilidad,
+    COALESCE(AVG(precio_venta),0) as promedio,
+    COUNT(CASE WHEN estado='activa' THEN 1 END) as activas 
+    FROM ventas WHERE fecha_venta BETWEEN ? AND ? AND estado != 'cancelada'");
 $stmt->bind_param("ss", $fecha_inicio, $fecha_fin);
 $stmt->execute();
 $resumen = $stmt->get_result()->fetch_assoc();
 
-// Por servicio
-$stmt = $conn->prepare("SELECT s.nombre as servicio, COUNT(v.id) as cantidad, SUM(v.precio_venta) as total FROM ventas v INNER JOIN perfiles p ON v.perfil_id=p.id INNER JOIN cuentas c ON p.cuenta_id=c.id INNER JOIN servicios s ON c.servicio_id=s.id WHERE v.fecha_venta BETWEEN ? AND ? GROUP BY s.id ORDER BY total DESC");
+// Margen de utilidad
+$margen = $resumen['ingresos'] > 0 ? ($resumen['utilidad'] / $resumen['ingresos']) * 100 : 0;
+
+// Por servicio con utilidad
+$stmt = $conn->prepare("SELECT s.nombre as servicio, COUNT(v.id) as cantidad, 
+    SUM(v.precio_venta) as ingresos, SUM(v.precio_compra) as costos,
+    SUM(v.precio_venta - v.precio_compra) as utilidad
+    FROM ventas v 
+    INNER JOIN perfiles p ON v.perfil_id=p.id 
+    INNER JOIN cuentas c ON p.cuenta_id=c.id 
+    INNER JOIN servicios s ON c.servicio_id=s.id 
+    WHERE v.fecha_venta BETWEEN ? AND ? AND v.estado != 'cancelada'
+    GROUP BY s.id ORDER BY utilidad DESC");
 $stmt->bind_param("ss", $fecha_inicio, $fecha_fin);
 $stmt->execute();
 $porServicio = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
-// Por vendedor
-$stmt = $conn->prepare("SELECT CONCAT(u.nombre,' ',u.apellido) as vendedor, COUNT(v.id) as cantidad, SUM(v.precio_venta) as total FROM ventas v INNER JOIN usuarios u ON v.vendedor_id=u.id WHERE v.fecha_venta BETWEEN ? AND ? GROUP BY u.id ORDER BY total DESC");
+// Por vendedor con utilidad
+$stmt = $conn->prepare("SELECT CONCAT(u.nombre,' ',u.apellido) as vendedor, COUNT(v.id) as cantidad, 
+    SUM(v.precio_venta) as ingresos, SUM(v.precio_venta - v.precio_compra) as utilidad
+    FROM ventas v 
+    INNER JOIN usuarios u ON v.vendedor_id=u.id 
+    WHERE v.fecha_venta BETWEEN ? AND ? AND v.estado != 'cancelada'
+    GROUP BY u.id ORDER BY utilidad DESC");
 $stmt->bind_param("ss", $fecha_inicio, $fecha_fin);
 $stmt->execute();
 $porVendedor = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
-// Por día
-$stmt = $conn->prepare("SELECT DATE(fecha_venta) as fecha, COUNT(*) as cantidad, SUM(precio_venta) as total FROM ventas WHERE fecha_venta BETWEEN ? AND ? GROUP BY DATE(fecha_venta) ORDER BY fecha DESC LIMIT 7");
+// Por día con utilidad
+$stmt = $conn->prepare("SELECT DATE(fecha_venta) as fecha, COUNT(*) as cantidad, 
+    SUM(precio_venta) as ingresos, SUM(precio_venta - precio_compra) as utilidad
+    FROM ventas WHERE fecha_venta BETWEEN ? AND ? AND estado != 'cancelada'
+    GROUP BY DATE(fecha_venta) ORDER BY fecha DESC LIMIT 7");
 $stmt->bind_param("ss", $fecha_inicio, $fecha_fin);
 $stmt->execute();
 $porDia = array_reverse($stmt->get_result()->fetch_all(MYSQLI_ASSOC));
 
 // Top clientes
-$stmt = $conn->prepare("SELECT CONCAT(cl.nombre,' ',cl.apellido) as cliente, COUNT(v.id) as cantidad, SUM(v.precio_venta) as total FROM ventas v INNER JOIN clientes cl ON v.cliente_id=cl.id WHERE v.fecha_venta BETWEEN ? AND ? GROUP BY cl.id ORDER BY total DESC LIMIT 5");
+$stmt = $conn->prepare("SELECT CONCAT(cl.nombre,' ',cl.apellido) as cliente, COUNT(v.id) as cantidad, 
+    SUM(v.precio_venta) as total, SUM(v.precio_venta - v.precio_compra) as utilidad
+    FROM ventas v 
+    INNER JOIN clientes cl ON v.cliente_id=cl.id 
+    WHERE v.fecha_venta BETWEEN ? AND ? AND v.estado != 'cancelada'
+    GROUP BY cl.id ORDER BY utilidad DESC LIMIT 5");
 $stmt->bind_param("ss", $fecha_inicio, $fecha_fin);
 $stmt->execute();
 $topClientes = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
@@ -56,17 +87,26 @@ if (isset($_GET['exportar'])) {
     header('Content-Disposition: attachment; filename=reporte_' . date('Ymd') . '.csv');
     $out = fopen('php://output', 'w');
     fprintf($out, chr(0xEF).chr(0xBB).chr(0xBF));
-    fputcsv($out, ['Reporte de Ventas', $fecha_inicio, $fecha_fin]);
+    fputcsv($out, ['REPORTE DE VENTAS', $fecha_inicio . ' a ' . $fecha_fin]);
+    fputcsv($out, []);
+    fputcsv($out, ['RESUMEN']);
     fputcsv($out, ['Total Ventas', $resumen['total']]);
     fputcsv($out, ['Ingresos', '$' . number_format($resumen['ingresos'], 2)]);
+    fputcsv($out, ['Costos', '$' . number_format($resumen['costos'], 2)]);
+    fputcsv($out, ['UTILIDAD', '$' . number_format($resumen['utilidad'], 2)]);
+    fputcsv($out, ['Margen', number_format($margen, 1) . '%']);
     fputcsv($out, []);
     fputcsv($out, ['POR SERVICIO']);
-    fputcsv($out, ['Servicio', 'Cantidad', 'Total']);
-    foreach ($porServicio as $r) fputcsv($out, [$r['servicio'], $r['cantidad'], '$' . number_format($r['total'], 2)]);
+    fputcsv($out, ['Servicio', 'Cantidad', 'Ingresos', 'Costos', 'Utilidad']);
+    foreach ($porServicio as $r) fputcsv($out, [$r['servicio'], $r['cantidad'], '$' . number_format($r['ingresos'], 2), '$' . number_format($r['costos'], 2), '$' . number_format($r['utilidad'], 2)]);
     fputcsv($out, []);
     fputcsv($out, ['POR VENDEDOR']);
-    fputcsv($out, ['Vendedor', 'Cantidad', 'Total']);
-    foreach ($porVendedor as $r) fputcsv($out, [$r['vendedor'], $r['cantidad'], '$' . number_format($r['total'], 2)]);
+    fputcsv($out, ['Vendedor', 'Cantidad', 'Ingresos', 'Utilidad']);
+    foreach ($porVendedor as $r) fputcsv($out, [$r['vendedor'], $r['cantidad'], '$' . number_format($r['ingresos'], 2), '$' . number_format($r['utilidad'], 2)]);
+    fputcsv($out, []);
+    fputcsv($out, ['TOP CLIENTES']);
+    fputcsv($out, ['Cliente', 'Compras', 'Total', 'Utilidad']);
+    foreach ($topClientes as $r) fputcsv($out, [$r['cliente'], $r['cantidad'], '$' . number_format($r['total'], 2), '$' . number_format($r['utilidad'], 2)]);
     fclose($out);
     exit;
 }
@@ -110,7 +150,7 @@ require_once '../includes/header.php';
                 <h1 class="text-lg font-semibold text-slate-800 dark:text-white">Reportes</h1>
             </div>
             <div class="flex items-center gap-3">
-                <a href="?periodo=<?php echo $periodo; ?>&fecha_inicio=<?php echo $fecha_inicio; ?>&fecha_fin=<?php echo $fecha_fin; ?>&exportar=1" class="flex items-center gap-2 px-4 py-2 bg-green-500 hover:bg-green-600 text-white text-sm font-medium rounded-lg"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg><span class="hidden sm:inline">Exportar</span></a>
+                <a href="?periodo=<?php echo $periodo; ?>&fecha_inicio=<?php echo $fecha_inicio; ?>&fecha_fin=<?php echo $fecha_fin; ?>&exportar=1" class="flex items-center gap-2 px-4 py-2 bg-green-500 hover:bg-green-600 text-white text-sm font-medium rounded-lg"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg><span class="hidden sm:inline">CSV</span></a>
                 <button onclick="toggleDarkMode()" class="p-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300"><svg class="w-5 h-5 hidden dark:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg><svg class="w-5 h-5 block dark:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg></button>
             </div>
         </header>
@@ -137,36 +177,68 @@ require_once '../includes/header.php';
                 <p class="text-sm text-slate-500 mt-2"><?php echo date('d/m/Y', strtotime($fecha_inicio)); ?> - <?php echo date('d/m/Y', strtotime($fecha_fin)); ?></p>
             </div>
             
-            <!-- Resumen -->
+            <!-- Tarjeta Principal: UTILIDAD -->
+            <div class="bg-gradient-to-r from-emerald-500 to-green-600 rounded-xl p-6 mb-6 text-white">
+                <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                    <div>
+                        <p class="text-emerald-100 text-sm mb-1">Utilidad del Periodo</p>
+                        <p class="text-4xl font-bold">$<?php echo number_format($resumen['utilidad'], 2); ?></p>
+                        <p class="text-emerald-100 text-sm mt-1">Margen: <?php echo number_format($margen, 1); ?>%</p>
+                    </div>
+                    <div class="grid grid-cols-3 gap-4 lg:gap-8">
+                        <div class="text-center">
+                            <p class="text-emerald-100 text-xs">Ingresos</p>
+                            <p class="text-xl font-bold">$<?php echo number_format($resumen['ingresos'], 2); ?></p>
+                        </div>
+                        <div class="text-center">
+                            <p class="text-emerald-100 text-xs">Costos</p>
+                            <p class="text-xl font-bold">$<?php echo number_format($resumen['costos'], 2); ?></p>
+                        </div>
+                        <div class="text-center">
+                            <p class="text-emerald-100 text-xs">Ventas</p>
+                            <p class="text-xl font-bold"><?php echo $resumen['total']; ?></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Resumen secundario -->
             <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 <div class="bg-light-card dark:bg-dark-card rounded-xl border border-light-border dark:border-dark-border p-4">
-                    <p class="text-xs text-slate-500 mb-1">Ingresos</p>
-                    <p class="text-2xl font-bold text-green-600">$<?php echo number_format($resumen['ingresos'], 2); ?></p>
+                    <p class="text-xs text-slate-500 mb-1">Promedio/Venta</p>
+                    <p class="text-xl font-bold text-slate-800 dark:text-white">$<?php echo number_format($resumen['promedio'], 2); ?></p>
                 </div>
                 <div class="bg-light-card dark:bg-dark-card rounded-xl border border-light-border dark:border-dark-border p-4">
-                    <p class="text-xs text-slate-500 mb-1">Total Ventas</p>
-                    <p class="text-2xl font-bold text-slate-800 dark:text-white"><?php echo $resumen['total']; ?></p>
+                    <p class="text-xs text-slate-500 mb-1">Utilidad/Venta</p>
+                    <p class="text-xl font-bold text-emerald-600">$<?php echo $resumen['total'] > 0 ? number_format($resumen['utilidad']/$resumen['total'], 2) : '0.00'; ?></p>
                 </div>
                 <div class="bg-light-card dark:bg-dark-card rounded-xl border border-light-border dark:border-dark-border p-4">
-                    <p class="text-xs text-slate-500 mb-1">Promedio</p>
-                    <p class="text-2xl font-bold text-slate-800 dark:text-white">$<?php echo number_format($resumen['promedio'], 2); ?></p>
+                    <p class="text-xs text-slate-500 mb-1">Ventas Activas</p>
+                    <p class="text-xl font-bold text-blue-600"><?php echo $resumen['activas']; ?></p>
                 </div>
                 <div class="bg-light-card dark:bg-dark-card rounded-xl border border-light-border dark:border-dark-border p-4">
-                    <p class="text-xs text-slate-500 mb-1">Activas</p>
-                    <p class="text-2xl font-bold text-blue-600"><?php echo $resumen['activas']; ?></p>
+                    <p class="text-xs text-slate-500 mb-1">Costo Promedio</p>
+                    <p class="text-xl font-bold text-red-500">$<?php echo $resumen['total'] > 0 ? number_format($resumen['costos']/$resumen['total'], 2) : '0.00'; ?></p>
                 </div>
             </div>
             
             <div class="grid lg:grid-cols-2 gap-6 mb-6">
                 <!-- Por Servicio -->
                 <div class="bg-light-card dark:bg-dark-card rounded-xl border border-light-border dark:border-dark-border overflow-hidden">
-                    <div class="p-4 border-b border-light-border dark:border-dark-border"><h2 class="font-semibold text-slate-800 dark:text-white">Ventas por Servicio</h2></div>
+                    <div class="p-4 border-b border-light-border dark:border-dark-border"><h2 class="font-semibold text-slate-800 dark:text-white">Utilidad por Servicio</h2></div>
                     <?php if (empty($porServicio)): ?><div class="p-8 text-center text-slate-500">Sin datos</div>
                     <?php else: ?><div class="p-4 space-y-3">
-                        <?php $max = max(array_column($porServicio, 'total') ?: [1]); foreach ($porServicio as $r): $pct = $max > 0 ? ($r['total']/$max)*100 : 0; ?>
+                        <?php $max = max(array_column($porServicio, 'utilidad') ?: [1]); foreach ($porServicio as $r): $pct = $max > 0 ? ($r['utilidad']/$max)*100 : 0; ?>
                         <div>
-                            <div class="flex justify-between text-sm mb-1"><span class="font-medium text-slate-700 dark:text-slate-300"><?php echo e($r['servicio']); ?></span><span class="text-slate-500"><?php echo $r['cantidad']; ?> - $<?php echo number_format($r['total'], 2); ?></span></div>
-                            <div class="h-2 bg-slate-200 dark:bg-slate-700 rounded-full"><div class="h-2 bg-primary-500 rounded-full" style="width:<?php echo $pct; ?>%"></div></div>
+                            <div class="flex justify-between text-sm mb-1">
+                                <span class="font-medium text-slate-700 dark:text-slate-300"><?php echo e($r['servicio']); ?></span>
+                                <span class="text-emerald-600 font-medium">+$<?php echo number_format($r['utilidad'], 2); ?></span>
+                            </div>
+                            <div class="flex justify-between text-xs text-slate-500 mb-1">
+                                <span><?php echo $r['cantidad']; ?> ventas</span>
+                                <span>Ingresos: $<?php echo number_format($r['ingresos'], 2); ?></span>
+                            </div>
+                            <div class="h-2 bg-slate-200 dark:bg-slate-700 rounded-full"><div class="h-2 bg-emerald-500 rounded-full" style="width:<?php echo $pct; ?>%"></div></div>
                         </div>
                         <?php endforeach; ?></div><?php endif; ?>
                 </div>
@@ -179,8 +251,14 @@ require_once '../includes/header.php';
                         <?php $pos = 1; foreach ($porVendedor as $r): ?>
                         <div class="flex items-center gap-4 p-4">
                             <div class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold <?php echo $pos===1?'bg-yellow-100 text-yellow-600':($pos===2?'bg-slate-200 text-slate-500':($pos===3?'bg-amber-100 text-amber-600':'bg-slate-100 text-slate-400')); ?>"><?php echo $pos; ?></div>
-                            <div class="flex-1"><p class="font-medium text-slate-800 dark:text-white"><?php echo e($r['vendedor']); ?></p><p class="text-xs text-slate-500"><?php echo $r['cantidad']; ?> ventas</p></div>
-                            <p class="font-bold text-green-600">$<?php echo number_format($r['total'], 2); ?></p>
+                            <div class="flex-1">
+                                <p class="font-medium text-slate-800 dark:text-white"><?php echo e($r['vendedor']); ?></p>
+                                <p class="text-xs text-slate-500"><?php echo $r['cantidad']; ?> ventas · $<?php echo number_format($r['ingresos'], 2); ?> ingresos</p>
+                            </div>
+                            <div class="text-right">
+                                <p class="font-bold text-emerald-600">+$<?php echo number_format($r['utilidad'], 2); ?></p>
+                                <p class="text-xs text-slate-500">utilidad</p>
+                            </div>
                         </div>
                         <?php $pos++; endforeach; ?></div><?php endif; ?>
                 </div>
@@ -189,13 +267,14 @@ require_once '../includes/header.php';
             <div class="grid lg:grid-cols-2 gap-6">
                 <!-- Por Día -->
                 <div class="bg-light-card dark:bg-dark-card rounded-xl border border-light-border dark:border-dark-border overflow-hidden">
-                    <div class="p-4 border-b border-light-border dark:border-dark-border"><h2 class="font-semibold text-slate-800 dark:text-white">Ultimos Dias</h2></div>
+                    <div class="p-4 border-b border-light-border dark:border-dark-border"><h2 class="font-semibold text-slate-800 dark:text-white">Utilidad Ultimos Dias</h2></div>
                     <?php if (empty($porDia)): ?><div class="p-8 text-center text-slate-500">Sin datos</div>
                     <?php else: ?><div class="p-4">
-                        <div class="flex items-end justify-between gap-2 h-32">
-                            <?php $max = max(array_column($porDia, 'total') ?: [1]); foreach ($porDia as $d): $h = $max > 0 ? ($d['total']/$max)*100 : 5; ?>
+                        <div class="flex items-end justify-between gap-2 h-40">
+                            <?php $max = max(array_column($porDia, 'utilidad') ?: [1]); foreach ($porDia as $d): $h = $max > 0 ? ($d['utilidad']/$max)*100 : 5; ?>
                             <div class="flex-1 flex flex-col items-center">
-                                <div class="w-full bg-primary-500 rounded-t" style="height:<?php echo max($h, 5); ?>%"></div>
+                                <p class="text-xs text-emerald-600 font-medium mb-1">$<?php echo number_format($d['utilidad'], 0); ?></p>
+                                <div class="w-full bg-emerald-500 rounded-t" style="height:<?php echo max($h, 5); ?>%"></div>
                                 <p class="text-xs text-slate-500 mt-1"><?php echo date('d/m', strtotime($d['fecha'])); ?></p>
                             </div>
                             <?php endforeach; ?>
@@ -210,8 +289,14 @@ require_once '../includes/header.php';
                     <?php else: ?><div class="divide-y divide-light-border dark:divide-dark-border">
                         <?php foreach ($topClientes as $c): ?>
                         <div class="flex items-center justify-between p-4">
-                            <div><p class="font-medium text-slate-800 dark:text-white"><?php echo e($c['cliente']); ?></p><p class="text-xs text-slate-500"><?php echo $c['cantidad']; ?> compras</p></div>
-                            <p class="font-bold text-green-600">$<?php echo number_format($c['total'], 2); ?></p>
+                            <div>
+                                <p class="font-medium text-slate-800 dark:text-white"><?php echo e($c['cliente']); ?></p>
+                                <p class="text-xs text-slate-500"><?php echo $c['cantidad']; ?> compras · $<?php echo number_format($c['total'], 2); ?></p>
+                            </div>
+                            <div class="text-right">
+                                <p class="font-bold text-emerald-600">+$<?php echo number_format($c['utilidad'], 2); ?></p>
+                                <p class="text-xs text-slate-500">utilidad</p>
+                            </div>
                         </div>
                         <?php endforeach; ?></div><?php endif; ?>
                 </div>
