@@ -284,13 +284,11 @@ function requireAdmin() {
     }
 }
 
-/**
- * Requiere que el usuario sea vendedor
- */
 function requireVendedor() {
     requireLogin();
     
-    if (!isVendedor()) {
+    // Admin también puede acceder al panel vendedor
+    if (!isVendedor() && !isAdmin()) {
         header('Location: /SistemaDeVentas/index.php?error=unauthorized');
         exit;
     }

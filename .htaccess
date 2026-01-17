@@ -1,12 +1,8 @@
-# =============================================
-# SISTEMA DE VENTAS - CONFIGURACIÓN DE SEGURIDAD
-# =============================================
-
 # Deshabilitar listado de directorios
 Options -Indexes
 
 # Proteger archivos sensibles
-<FilesMatch "^(database\.php|auth\.php|\.htaccess|\.gitignore|\.gitattributes)$">
+<FilesMatch "^(database\.php|auth\.php|\.htaccess|\.gitignore)$">
     Order Allow,Deny
     Deny from all
 </FilesMatch>
@@ -16,45 +12,6 @@ Options -Indexes
     Order Allow,Deny
     Deny from all
 </FilesMatch>
-
-# Prevenir acceso a archivos ocultos
-<FilesMatch "^\.">
-    Order Allow,Deny
-    Deny from all
-</FilesMatch>
-
-# Headers de seguridad adicionales
-<IfModule mod_headers.c>
-    # Prevenir clickjacking
-    Header always set X-Frame-Options "DENY"
-    
-    # Prevenir MIME sniffing
-    Header always set X-Content-Type-Options "nosniff"
-    
-    # XSS Protection
-    Header always set X-XSS-Protection "1; mode=block"
-    
-    # Referrer Policy
-    Header always set Referrer-Policy "strict-origin-when-cross-origin"
-</IfModule>
-
-# Configuración de PHP
-<IfModule mod_php.c>
-    # Ocultar versión de PHP
-    php_flag expose_php off
-    
-    # Configuración de errores (producción)
-    # php_flag display_errors off
-    # php_flag log_errors on
-</IfModule>
-
-# Prevenir ejecución de PHP en carpetas de uploads (si las hubiera)
-<Directory "uploads">
-    <FilesMatch "\.php$">
-        Order Allow,Deny
-        Deny from all
-    </FilesMatch>
-</Directory>
 
 # Redirigir errores
 ErrorDocument 403 /SistemaDeVentas/index.php
