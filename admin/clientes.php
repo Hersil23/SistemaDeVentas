@@ -97,6 +97,35 @@ if (!empty($params)) {
     $clientes = $conn->query($sql)->fetch_all(MYSQLI_ASSOC);
 }
 
+// Cargar servicios de cada cliente directamente
+$serviciosPorCliente = [];
+$sqlServicios = "SELECT 
+    v.cliente_id,
+    v.id as venta_id,
+    v.precio_venta,
+    DATE_FORMAT(v.fecha_venta, '%d/%m/%Y') as fecha_venta,
+    s.nombre as servicio,
+    c.cuenta,
+    c.password,
+    DATE_FORMAT(c.fecha_vencimiento, '%d/%m/%Y') as fecha_vencimiento,
+    DATEDIFF(c.fecha_vencimiento, CURDATE()) as dias_vence,
+    p.numero_perfil,
+    p.pin
+FROM ventas v
+INNER JOIN perfiles p ON v.perfil_id = p.id
+INNER JOIN cuentas c ON p.cuenta_id = c.id
+INNER JOIN servicios s ON c.servicio_id = s.id
+ORDER BY v.cliente_id, s.nombre";
+
+$result = $conn->query($sqlServicios);
+while ($row = $result->fetch_assoc()) {
+    $clienteId = $row['cliente_id'];
+    if (!isset($serviciosPorCliente[$clienteId])) {
+        $serviciosPorCliente[$clienteId] = [];
+    }
+    $serviciosPorCliente[$clienteId][] = $row;
+}
+
 $pageTitle = 'Clientes';
 require_once '../includes/header.php';
 ?>
@@ -192,7 +221,7 @@ require_once '../includes/header.php';
                             <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300"><?php echo e($c['email'] ?: '-'); ?></td>
                             <td class="px-4 py-3 text-center">
                                 <?php if ($c['total_ventas'] > 0): ?>
-                                <button onclick="verCuentas(<?php echo $c['id']; ?>, '<?php echo e(addslashes($c['nombre'] . ' ' . $c['apellido'])); ?>')" class="inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 text-xs font-medium hover:bg-blue-200 dark:hover:bg-blue-900/50" title="Ver servicios">
+                                <button onclick="verCuentas(<?php echo $c['id']; ?>)" class="inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 text-xs font-medium hover:bg-blue-200 dark:hover:bg-blue-900/50" title="Ver servicios">
                                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
                                     <?php echo $c['total_ventas']; ?>
                                 </button>
@@ -228,7 +257,7 @@ require_once '../includes/header.php';
                         <div class="flex items-center gap-4 text-sm text-slate-500 mb-3">
                             <?php if ($c['email']): ?><span><?php echo e($c['email']); ?></span><?php endif; ?>
                             <?php if ($c['total_ventas'] > 0): ?>
-                            <button onclick="verCuentas(<?php echo $c['id']; ?>, '<?php echo e(addslashes($c['nombre'] . ' ' . $c['apellido'])); ?>')" class="inline-flex items-center gap-1 text-blue-600">
+                            <button onclick="verCuentas(<?php echo $c['id']; ?>)" class="inline-flex items-center gap-1 text-blue-600">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
                                 <?php echo $c['total_ventas']; ?> servicios
                             </button>
@@ -283,13 +312,14 @@ require_once '../includes/header.php';
             </div>
             <button onclick="cerrarModalCuentas()" class="p-2 text-slate-400"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
         </div>
-        <div id="cuentasContent" class="p-4 overflow-y-auto flex-1">
-            <div class="text-center py-8 text-slate-500">Cargando...</div>
-        </div>
+        <div id="cuentasContent" class="p-4 overflow-y-auto flex-1"></div>
     </div>
 </div>
 
 <script>
+// Datos de servicios cargados desde PHP
+const serviciosPorCliente = <?php echo json_encode($serviciosPorCliente); ?>;
+
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('-translate-x-full');document.getElementById('sidebarOverlay').classList.toggle('hidden');}
 
 function openModal(tipo,data=null){
@@ -318,47 +348,51 @@ function openModal(tipo,data=null){
 
 function closeModal(){document.getElementById('modal').classList.add('hidden');}
 
-function verCuentas(clienteId, clienteNombre) {
-    document.getElementById('cuentasCliente').textContent = clienteNombre;
-    document.getElementById('cuentasContent').innerHTML = '<div class="text-center py-8 text-slate-500">Cargando...</div>';
-    document.getElementById('modalCuentas').classList.remove('hidden');
+function verCuentas(clienteId) {
+    const servicios = serviciosPorCliente[clienteId] || [];
     
-    fetch('ajax/get_cuentas_cliente.php?cliente_id=' + clienteId)
-        .then(r => r.json())
-        .then(data => {
-            if (data.success && data.cuentas.length > 0) {
-                let html = '<div class="space-y-3">';
-                data.cuentas.forEach(c => {
-                    const venceClass = c.dias_vence < 0 ? 'text-red-600 font-bold' : (c.dias_vence <= 7 ? 'text-amber-600' : 'text-slate-600 dark:text-slate-300');
-                    const venceText = c.dias_vence < 0 ? 'Vencido' : (c.dias_vence === 0 ? 'Hoy' : c.dias_vence + ' dias');
-                    
-                    html += '<div class="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">' +
-                        '<div class="flex items-start justify-between mb-2">' +
-                            '<div><span class="font-semibold text-slate-800 dark:text-white">' + c.servicio + '</span>' +
-                            '<span class="text-xs text-slate-400 ml-2">Perfil ' + c.numero_perfil + '</span></div>' +
-                            '<span class="text-sm ' + venceClass + '">' + venceText + '</span>' +
-                        '</div>' +
-                        '<div class="grid grid-cols-2 gap-2 text-sm">' +
-                            '<div><p class="text-slate-500">Correo:</p><p class="text-slate-800 dark:text-white font-mono text-xs">' + c.cuenta + '</p></div>' +
-                            '<div><p class="text-slate-500">Contrasena:</p><p class="text-slate-800 dark:text-white font-mono text-xs">' + (c.password || 'N/A') + '</p></div>' +
-                            '<div><p class="text-slate-500">PIN:</p><p class="text-slate-800 dark:text-white">' + (c.pin || 'N/A') + '</p></div>' +
-                            '<div><p class="text-slate-500">Vencimiento:</p><p class="text-slate-800 dark:text-white">' + (c.fecha_vencimiento || 'N/A') + '</p></div>' +
-                        '</div>' +
-                        '<div class="mt-2 pt-2 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between">' +
-                            '<span class="text-sm font-medium text-green-600">$' + parseFloat(c.precio_venta).toFixed(2) + '</span>' +
-                            '<span class="text-xs text-slate-400">Compra: ' + c.fecha_venta + '</span>' +
-                        '</div>' +
-                    '</div>';
-                });
-                html += '</div>';
-                document.getElementById('cuentasContent').innerHTML = html;
-            } else {
-                document.getElementById('cuentasContent').innerHTML = '<div class="text-center py-8 text-slate-500">No tiene servicios activos</div>';
-            }
-        })
-        .catch(err => {
-            document.getElementById('cuentasContent').innerHTML = '<div class="text-center py-8 text-red-500">Error al cargar</div>';
+    // Buscar nombre del cliente
+    let nombreCliente = '';
+    document.querySelectorAll('tr').forEach(tr => {
+        const btn = tr.querySelector('button[onclick*="verCuentas(' + clienteId + ')"]');
+        if (btn) {
+            nombreCliente = tr.querySelector('td span.font-medium')?.textContent || '';
+        }
+    });
+    
+    document.getElementById('cuentasCliente').textContent = nombreCliente;
+    
+    if (servicios.length === 0) {
+        document.getElementById('cuentasContent').innerHTML = '<div class="text-center py-8 text-slate-500">No tiene servicios activos</div>';
+    } else {
+        let html = '<div class="space-y-3">';
+        servicios.forEach(c => {
+            const venceClass = c.dias_vence < 0 ? 'text-red-600 font-bold' : (c.dias_vence <= 7 ? 'text-amber-600' : 'text-slate-600 dark:text-slate-300');
+            const venceText = c.dias_vence < 0 ? 'Vencido' : (c.dias_vence === 0 ? 'Hoy' : c.dias_vence + ' dias');
+            
+            html += '<div class="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">' +
+                '<div class="flex items-start justify-between mb-2">' +
+                    '<div><span class="font-semibold text-slate-800 dark:text-white">' + c.servicio + '</span>' +
+                    '<span class="text-xs text-slate-400 ml-2">Perfil ' + c.numero_perfil + '</span></div>' +
+                    '<span class="text-sm ' + venceClass + '">' + venceText + '</span>' +
+                '</div>' +
+                '<div class="grid grid-cols-2 gap-2 text-sm">' +
+                    '<div><p class="text-slate-500">Correo:</p><p class="text-slate-800 dark:text-white font-mono text-xs">' + c.cuenta + '</p></div>' +
+                    '<div><p class="text-slate-500">Contrasena:</p><p class="text-slate-800 dark:text-white font-mono text-xs">' + (c.password || 'N/A') + '</p></div>' +
+                    '<div><p class="text-slate-500">PIN:</p><p class="text-slate-800 dark:text-white">' + (c.pin || 'N/A') + '</p></div>' +
+                    '<div><p class="text-slate-500">Vencimiento:</p><p class="text-slate-800 dark:text-white">' + (c.fecha_vencimiento || 'N/A') + '</p></div>' +
+                '</div>' +
+                '<div class="mt-2 pt-2 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between">' +
+                    '<span class="text-sm font-medium text-green-600">$' + parseFloat(c.precio_venta).toFixed(2) + '</span>' +
+                    '<span class="text-xs text-slate-400">Compra: ' + c.fecha_venta + '</span>' +
+                '</div>' +
+            '</div>';
         });
+        html += '</div>';
+        document.getElementById('cuentasContent').innerHTML = html;
+    }
+    
+    document.getElementById('modalCuentas').classList.remove('hidden');
 }
 
 function cerrarModalCuentas() {

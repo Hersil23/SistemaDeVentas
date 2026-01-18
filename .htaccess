@@ -12,7 +12,3 @@ Options -Indexes
     Order Allow,Deny
     Deny from all
 </FilesMatch>
-
-# Redirigir errores
-ErrorDocument 403 /SistemaDeVentas/index.php
-ErrorDocument 404 /SistemaDeVentas/index.php

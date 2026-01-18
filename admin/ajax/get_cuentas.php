@@ -1,7 +1,6 @@
 <?php
 /**
  * Obtener cuentas/servicios activos de un cliente
- * Archivo independiente sin includes problemáticos
  */
 session_start();
 
@@ -14,7 +13,7 @@ if (!isset($_SESSION['usuario_id'])) {
 }
 
 // Conexión directa a base de datos
-$host = 'localhost';
+$host = 'localhost:3307';
 $dbname = 'sistema_ventas';
 $username = 'root';
 $password = '';
